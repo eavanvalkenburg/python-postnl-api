@@ -15,22 +15,52 @@ def main():
     username = args.username
     password = args.password
     # Login using your jouw.postnl.nl credentials
-    postnl = PostNL_API(username, password)
+    api = PostNL_API(username, password, 5)
 
-    # Get relevant shipments
-    print("Getting shipments")
-    shipments = postnl.get_relevant_shipments()
-    print("Number of shipments: ", len(shipments))
-    print("Listing shipments:")
-    for shipment in shipments:
-        print (shipment['key'])
+    # Get packages
+    print("Get packages")
+    packages = api.get_delivery()
+    print("Number of packages to be delivered: ", len(packages))
+    print("Listing packages:")
+    for package in packages:
+        print("ID: " + package.id)
+        print("Name: " + package.name)
+        print("Type: " + package.type)
+        print("Status: " + package.status)
+        print("Status Message: " + package.status_message)
+        print("URL: " + package.url)
+        if package.planned_date is not None:
+            print("Planned date: " + package.planned_date)
+            print("Planned from: " + package.planned_from)
+            print("Planned to: " + package.planned_to)
+        if package.delivery_date is not None:
+            print("Delivery date: " + package.delivery_date)
 
-    # Get letters
-    print("Getting letters")
-    letters = postnl.get_letters()
-    print("Number of letters: ", len(letters))
-    print("Listing letters:")
-    print (letters)
+    packages = api.get_distribution()
+    print("Number of packages submitted: ", len(packages))
+    print("Listing packages:")
+    for package in packages:
+        print("ID: " + package.id)
+        print("Name: " + package.name)
+        print("Type: " + package.type)
+        print("Status: " + package.status)
+        print("Status Message: " + package.status_message)
+        print("URL: " + package.url)
+        if package.planned_date is not None:
+            print("Planned date: " + package.planned_date)
+            print("Planned from: " + package.planned_from)
+            print("Planned to: " + package.planned_to)
+        if package.delivery_date is not None:
+            print("Delivery date: " + package.delivery_date)
+
+    if api.is_letters_activated() is True:
+        letters = api.get_letters()
+        print("Number of letters: ", len(letters))
+        print("Listing letters:")
+        for letter in letters:
+            print("ID: " + letter.id)
+            print("Image URL: " + letter.image)
+            print("Status Message: " + letter.status_message)
 
 
 if __name__ == '__main__':

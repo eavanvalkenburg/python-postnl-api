@@ -10,13 +10,13 @@ import requests
 from postnl_api.items.package import Package
 from postnl_api.items.letter import Letter
 
-BASE_URL = 'https://jouw.postnl.nl'
+BASE_URL = "https://jouw.postnl.nl"
 
-AUTHENTICATE_URL = BASE_URL + '/mobile/token'
-SHIPMENTS_URL = BASE_URL + '/mobile/api/shipments'
-PROFILE_URL = BASE_URL + '/mobile/api/profile'
-LETTERS_URL = BASE_URL + '/mobile/api/letters'
-VALIDATE_LETTERS_URL = BASE_URL + '/mobile/api/letters/validation'
+AUTHENTICATE_URL = BASE_URL + "/mobile/token"
+SHIPMENTS_URL = BASE_URL + "/mobile/api/shipments"
+PROFILE_URL = BASE_URL + "/mobile/api/profile"
+LETTERS_URL = BASE_URL + "/mobile/api/letters"
+VALIDATE_LETTERS_URL = BASE_URL + "/mobile/api/letters/validation"
 
 ## PROFILE_URL
 ## isMyMailAvailable: true / false
@@ -34,10 +34,7 @@ VALIDATE_LETTERS_URL = BASE_URL + '/mobile/api/letters/validation'
 ## DELETE LETTER
 ## DELETE /mobile/api/letters/{letter-barcode}
 
-DEFAULT_HEADER = {
-    'api-version': '4.16',
-    'X-Client-Library': 'python-postnl-api',
-}
+DEFAULT_HEADER = {"api-version": "4.16", "X-Client-Library": "python-postnl-api"}
 
 REFRESH_RATE = 120
 
@@ -77,7 +74,6 @@ class PostNL_API(object):
             self.update_packages()
             self.update_letter_status()
             self.update_letters()
-
             self._last_refresh = int(time.time())
 
     def update_packages(self):
@@ -91,9 +87,9 @@ class PostNL_API(object):
 
         for package in packages:
             if package.get("settings").get("box") == "Sender":
-                self._distribution[package['key']] = Package(package)
+                self._distribution[package["key"]] = Package(package)
             else:
-                self._delivery[package['key']] = Package(package)
+                self._delivery[package["key"]] = Package(package)
 
     def update_letters(self):
         """ Retrieve letters """
@@ -107,31 +103,38 @@ class PostNL_API(object):
         self._letters = {}
 
         for letter in letters:
-            documents = self._request_update(LETTERS_URL + "/" + letter['barcode'])
-            self._letters[letter['barcode']] = Letter(letter, documents)
+            documents = self._request_update(LETTERS_URL + "/" + letter["barcode"])
+            self._letters[letter["barcode"]] = Letter(letter, documents)
 
     def update_letter_status(self):
+        """ update the state of being able to see letters """
         validate = self._request_update(VALIDATE_LETTERS_URL)
 
-        if validate.get('status') == 'Validated':
+        if validate.get("status") == "Validated":
             self._letters_activated = True
 
-    def get_delivery(self):
+    def get_relevant_deliveries(self):
+        """ filter shipments to today's and future shipments """
+        self.update()
+        return [
+            s
+            for s in self._delivery.values()
+            if (not s.is_delivered) or (s.is_delivered and s.delivery_today)
+        ]
+
+    def get_deliveries(self):
         """ Get all packages to be delivered to you """
         self.update()
-
         return self._delivery.values()
 
-    def get_distribution(self):
+    def get_distributions(self):
         """ Get all packages submitted by you """
         self.update()
-
         return self._distribution.values()
 
     def get_letters(self):
         """ Get all letters to be delivered to you """
         self.update()
-
         return self._letters.values()
 
     def is_letters_activated(self):
@@ -141,13 +144,11 @@ class PostNL_API(object):
     def _request_update(self, url):
         """ Perform a request to update information """
         self._is_token_expired()
-
         headers = {
-            'authorization': 'Bearer ' + self._access_token,
-            'Content-Type': 'application/json',
+            "authorization": "Bearer " + self._access_token,
+            "Content-Type": "application/json",
         }
-
-        response = requests.request('GET', url, headers={**headers, **DEFAULT_HEADER})
+        response = requests.request("GET", url, headers={**headers, **DEFAULT_HEADER})
 
         if response.status_code == 401:
             _LOGGER.debug("Access denied. Failed to refresh?")
@@ -161,57 +162,62 @@ class PostNL_API(object):
         return response.json()
 
     def _request_login(self):
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
         payload = {
-            'grant_type': 'password',
-            'client_id': 'pwAndroidApp',
-            'username': self._user,
-            'password': self._password
+            "grant_type": "password",
+            "client_id": "pwAndroidApp",
+            "username": self._user,
+            "password": self._password,
         }
 
         try:
             response = requests.request(
-                'POST', AUTHENTICATE_URL, data=payload, headers={**headers, **DEFAULT_HEADER})
+                "POST",
+                AUTHENTICATE_URL,
+                data=payload,
+                headers={**headers, **DEFAULT_HEADER},
+            )
             data = response.json()
 
         except Exception:
             raise (UnauthorizedException())
 
-        if 'error' in data:
-            raise UnauthorizedException(data['error'])
+        if "error" in data:
+            raise UnauthorizedException(data["error"])
 
-        self._access_token = data['access_token']
-        self._refresh_token = unquote(data['refresh_token'])
-        self._token_expires_in = data['expires_in']
-        self._token_expires_at = datetime.now() + timedelta(0, (int(data['expires_in']) - 20))
+        self._access_token = data["access_token"]
+        self._refresh_token = unquote(data["refresh_token"])
+        self._token_expires_in = data["expires_in"]
+        self._token_expires_at = datetime.now() + timedelta(
+            0, (int(data["expires_in"]) - 20)
+        )
 
     def _request_access_token(self):
         """ Refresh access_token """
 
-        headers = {
-            'Content-Type': 'application/x-www-form-urlencoded',
-        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-        payload = {
-            'grant_type': 'refresh_token',
-            'refresh_token': self._refresh_token
-        }
+        payload = {"grant_type": "refresh_token", "refresh_token": self._refresh_token}
 
         response = requests.request(
-            'POST', AUTHENTICATE_URL, data=payload, headers={**headers, **DEFAULT_HEADER})
+            "POST",
+            AUTHENTICATE_URL,
+            data=payload,
+            headers={**headers, **DEFAULT_HEADER},
+        )
 
         data = response.json()
 
         if response.status_code != 200:
             self._request_login()
         else:
-            self._access_token = data['access_token']
-            self._refresh_token = unquote(data['refresh_token'])
-            self._token_expires_in = data['expires_in']
-            self._token_expires_at = datetime.now() + timedelta(0, (int(data['expires_in']) - 20))
+            self._access_token = data["access_token"]
+            self._refresh_token = unquote(data["refresh_token"])
+            self._token_expires_in = data["expires_in"]
+            self._token_expires_at = datetime.now() + timedelta(
+                0, (int(data["expires_in"]) - 20)
+            )
 
 
 class UnauthorizedException(Exception):

@@ -5,12 +5,8 @@ from postnl_api import PostNL_API
 def main():
     """Main function."""
     parser = argparse.ArgumentParser(description="Run the test for PostNL_API")
-    parser.add_argument(
-        'username', type=str,
-        help="Your username (email address)")
-    parser.add_argument(
-        'password', type=str,
-        help="Your password")
+    parser.add_argument("username", type=str, help="Your username (email address)")
+    parser.add_argument("password", type=str, help="Your password")
     args = parser.parse_args()
     username = args.username
     password = args.password
@@ -63,5 +59,5 @@ def main():
             print("Status Message: " + letter.status_message)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

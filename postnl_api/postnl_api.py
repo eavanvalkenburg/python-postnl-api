@@ -1,9 +1,14 @@
 """ Python wrapper for the PostNL API """
 
+import logging
+import time
 from datetime import datetime, timedelta
-import re
+from urllib.parse import unquote
 
 import requests
+
+from postnl_api.items.package import Package
+from postnl_api.items.letter import Letter
 
 BASE_URL = 'https://jouw.postnl.nl'
 
@@ -13,253 +18,205 @@ PROFILE_URL = BASE_URL + '/mobile/api/profile'
 LETTERS_URL = BASE_URL + '/mobile/api/letters'
 VALIDATE_LETTERS_URL = BASE_URL + '/mobile/api/letters/validation'
 
+## PROFILE_URL
+## isMyMailAvailable: true / false
+## hasPendingMyMailValidation: true / false
+
+## VALIDATE_LETTERS_URL
+## status: Validated
+
+## CHANGE NAME
+## PATCH /mobile/api/shipments/{package-key}
+
+## DELETE SHIPMENT
+## DELETE /mobile/api/shipments/{package-key}
+
+## DELETE LETTER
+## DELETE /mobile/api/letters/{letter-barcode}
+
 DEFAULT_HEADER = {
-    'api-version': '4.7',
-    'user-agent': 'PostNL/1 CFNetwork/889.3 Darwin/17.2.0',
+    'api-version': '4.16',
+    'X-Client-Library': 'python-postnl-api',
 }
 
+REFRESH_RATE = 120
 
-class UnauthorizedException(Exception):
-    pass
+_LOGGER = logging.getLogger(__name__)
 
 
 class PostNL_API(object):
     """ Interface class for the PostNL API """
 
-    def __init__(self, user, password):
+    def __init__(self, user, password, refresh_rate=REFRESH_RATE):
         """ Constructor """
 
         self._user = user
         self._password = password
+        self._delivery = {}
+        self._distribution = {}
+        self._letters = {}
+        self._letters_activated = False
+        self._last_refresh = None
+        self._refresh_rate = refresh_rate
+        self._request_login()
+
+    def _is_token_expired(self):
+        """ Check if access token is expired """
+        if datetime.now() > self._token_expires_at:
+            self._request_access_token()
+            return True
+
+        return False
+
+    def update(self):
+        """ Update the cache """
+        current_time = int(time.time())
+        last_refresh = 0 if self._last_refresh is None else self._last_refresh
+
+        if current_time >= (last_refresh + self._refresh_rate):
+            self.update_packages()
+            self.update_letter_status()
+            self.update_letters()
+
+            self._last_refresh = int(time.time())
+
+    def update_packages(self):
+        """ Retrieve packages """
+        packages = self._request_update(SHIPMENTS_URL)
+        if packages is False:
+            return
+
+        self._delivery = {}
+        self._distribution = {}
+
+        for package in packages:
+            if package.get("settings").get("box") == "Sender":
+                self._distribution[package['key']] = Package(package)
+            else:
+                self._delivery[package['key']] = Package(package)
+
+    def update_letters(self):
+        """ Retrieve letters """
+        if self._letters_activated is False:
+            return
+
+        letters = self._request_update(LETTERS_URL)
+        if letters is False:
+            return
+
+        self._letters = {}
+
+        for letter in letters:
+            documents = self._request_update(LETTERS_URL + "/" + letter['barcode'])
+            self._letters[letter['barcode']] = Letter(letter, documents)
+
+    def update_letter_status(self):
+        validate = self._request_update(VALIDATE_LETTERS_URL)
+
+        if validate.get('status') == 'Validated':
+            self._letters_activated = True
+
+    def get_delivery(self):
+        """ Get all packages to be delivered to you """
+        self.update()
+
+        return self._delivery.values()
+
+    def get_distribution(self):
+        """ Get all packages submitted by you """
+        self.update()
+
+        return self._distribution.values()
+
+    def get_letters(self):
+        """ Get all letters to be delivered to you """
+        self.update()
+
+        return self._letters.values()
+
+    def is_letters_activated(self):
+        """ Return if letters are activated or not """
+        return self._letters_activated
+
+    def _request_update(self, url):
+        """ Perform a request to update information """
+        self._is_token_expired()
+
+        headers = {
+            'authorization': 'Bearer ' + self._access_token,
+            'Content-Type': 'application/json',
+        }
+
+        response = requests.request('GET', url, headers={**headers, **DEFAULT_HEADER})
+
+        if response.status_code == 401:
+            _LOGGER.debug("Access denied. Failed to refresh?")
+            self._request_access_token()
+            self._request_update(url)
+
+        if response.status_code != 200:
+            _LOGGER.error("Unable to perform request " + str(response.content))
+            return False
+
+        return response.json()
+
+    def _request_login(self):
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        }
 
         payload = {
             'grant_type': 'password',
-            'client_id': 'pwIOSApp',
+            'client_id': 'pwAndroidApp',
             'username': self._user,
             'password': self._password
         }
 
         try:
             response = requests.request(
-                'POST', AUTHENTICATE_URL, data=payload, headers=DEFAULT_HEADER)
+                'POST', AUTHENTICATE_URL, data=payload, headers={**headers, **DEFAULT_HEADER})
             data = response.json()
 
         except Exception:
-            raise(UnauthorizedException())
+            raise (UnauthorizedException())
 
         if 'error' in data:
             raise UnauthorizedException(data['error'])
 
         self._access_token = data['access_token']
-        self._refresh_token = data['refresh_token']
+        self._refresh_token = unquote(data['refresh_token'])
         self._token_expires_in = data['expires_in']
-        self._token_expires_at = datetime.now(
-        ) + timedelta(0, data['expires_in'])
+        self._token_expires_at = datetime.now() + timedelta(0, (int(data['expires_in']) - 20))
 
-    def _is_token_expired(self):
-        """ Check if access token is expired """
-        if (datetime.now() > self._token_expires_at):
-            self._refresh_access_token()
-            return True
-
-        return False
-
-    def _refresh_access_token(self):
+    def _request_access_token(self):
         """ Refresh access_token """
+
+        headers = {
+            'Content-Type': 'application/x-www-form-urlencoded',
+        }
 
         payload = {
             'grant_type': 'refresh_token',
-            'client_id': 'pwIOSApp',
             'refresh_token': self._refresh_token
         }
 
         response = requests.request(
-            'POST', AUTHENTICATE_URL, data=payload, headers=DEFAULT_HEADER)
+            'POST', AUTHENTICATE_URL, data=payload, headers={**headers, **DEFAULT_HEADER})
 
         data = response.json()
 
-        self._access_token = data['access_token']
-
-    def parse_datetime(self, text, dateFormat='%d-%m-%Y', timeFormat='%H:%M'):
-
-        def parse_date(date):
-            return datetime.strptime(date.group(1)
-                                     .replace(' ', '')[:-6], '%Y-%m-%dT%H:%M:%S').strftime(dateFormat)
-
-        def parse_time(date):
-            return datetime.strptime(date.group(1)
-                                     .replace(' ', '')[:-6], '%Y-%m-%dT%H:%M:%S').strftime(timeFormat)
-
-        text = re.sub(r'{(?:Date|dateAbs):(.*?)}', parse_date, text)
-        text = re.sub(r'{(?:time):(.*?)}', parse_time, text)
-
-        return text
-
-    def get_shipments(self):
-        """ Retrieve shipments """
-
-        self._is_token_expired()
-
-        headers = {
-            'authorization': 'Bearer ' + self._access_token
-        }
-
-        response = requests.request(
-            'GET', SHIPMENTS_URL, headers={**headers, **DEFAULT_HEADER})
-
-        if response.status_code == 401:
-            self._refresh_access_token()
-            shipments = self.get_shipments()
+        if response.status_code != 200:
+            self._request_login()
         else:
-            shipments = response.json()
+            self._access_token = data['access_token']
+            self._refresh_token = unquote(data['refresh_token'])
+            self._token_expires_in = data['expires_in']
+            self._token_expires_at = datetime.now() + timedelta(0, (int(data['expires_in']) - 20))
 
-        return shipments
 
-    def get_shipment(self, shipment_id):
-        """ Retrieve single shipment by id """
+class UnauthorizedException(Exception):
+    pass
 
-        self._is_token_expired()
 
-        headers = {
-            'authorization': 'Bearer ' + self._access_token
-        }
-
-        response = requests.request(
-            'GET', SHIPMENTS_URL + '/' + shipment_id, headers={**headers, **DEFAULT_HEADER})
-
-        if response.status_code == 401:
-            self._refresh_access_token()
-            shipments = self.get_shipment(shipment_id)
-        else:
-            shipments = response.json()
-
-        return shipments
-
-    def get_profile(self):
-        """ Retrieve profile """
-
-        self._is_token_expired()
-
-        headers = {
-            'authorization': 'Bearer ' + self._access_token
-        }
-
-        response = requests.request(
-            'GET', PROFILE_URL, headers={**headers, **DEFAULT_HEADER})
-
-        if response.status_code == 401:
-            self._refresh_access_token()
-            profile = self.get_profile()
-        else:
-            profile = response.json()
-
-        return profile
-
-    def validate_letters(self):
-        """ Retrieve letter validation status """
-
-        self._is_token_expired()
-
-        headers = {
-            'authorization': 'Bearer ' + self._access_token
-        }
-
-        response = requests.request(
-            'GET', VALIDATE_LETTERS_URL, headers={**headers, **DEFAULT_HEADER})
-
-        if response.status_code == 401:
-            self._refresh_access_token()
-            validation = self.validate_letters()
-        else:
-            validation = response.json()
-
-        return validation
-
-    def get_letters(self):
-        """ Retrieve letters """
-
-        self._is_token_expired()
-
-        headers = {
-            'authorization': 'Bearer ' + self._access_token
-        }
-
-        response = requests.request(
-            'GET', LETTERS_URL, headers={**headers, **DEFAULT_HEADER})
-
-        if response.status_code == 401:
-            self._refresh_access_token()
-            letters = self.get_letters()
-        else:
-            letters = response.json()
-
-        # TODO Add validation / exception handling
-        # if letters['type'] == 'ProfileValidationFeatureMissing':
-        #     _LOGGER.error(letters['message'])
-        #     return []
-
-        return letters
-
-    def get_letter(self, letter_id):
-        """ Retrieve single letter by id """
-
-        self._is_token_expired()
-
-        headers = {
-            'authorization': 'Bearer ' + self._access_token
-        }
-
-        response = requests.request(
-            'GET', LETTERS_URL + '/' + letter_id, headers={**headers, **DEFAULT_HEADER})
-
-        if response.status_code == 200:
-            letter = response.json()
-        elif response.status_code == 401:
-            self._refresh_access_token()
-            letter = self.get_letter(letter_id)
-        else:
-            raise Exception('Unknown Error')
-
-        return letter
-
-    def get_relevant_shipments(self):
-        """ Retrieve not delivered shipments and shipments delivered today """
-
-        shipments = self.get_shipments()
-        relevant_shipments = []
-
-        for shipment in shipments:
-
-            # Check if package is not delivered yet
-            if not shipment['status']['isDelivered']:
-                relevant_shipments.append(shipment)
-                continue
-
-            # Check if package has been delivered today
-            if shipment['status']['delivery'] and \
-               shipment['status']['delivery']['deliveryDate']:
-                delivery_date = datetime.strptime(
-                    shipment['status']['delivery']['deliveryDate'][:19], "%Y-%m-%dT%H:%M:%S")
-
-                if delivery_date.date() == datetime.today().date():
-                    relevant_shipments.append(shipment)
-
-        return relevant_shipments
-
-    def get_relevant_letters(self):
-        """ Retrieve letters with a future delivery date """
-
-        letters = self.get_letters()
-        relevant_letters = []
-
-        for letter in letters:
-
-            # Check if letter is scheduled for delivery in the future
-            if letter['expectedDeliveryDate']:
-                expected_delivery_date = datetime.strptime(
-                    letter['expectedDeliveryDate'][:19], "%Y-%m-%dT%H:%M:%S")
-
-                if expected_delivery_date.date() >= datetime.today().date():
-                    relevant_letters.append(letter)
-
-        return relevant_letters
+class PostnlApiException(Exception):
+    pass

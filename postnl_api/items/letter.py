@@ -14,18 +14,5 @@ class Letter(object):
         if len(documents.get("documents")) > 0:
             self.image = documents.get("documents")[0].get("link") + "?type=png"
 
-    def id(self):
-        return self.id
-
-    def delivery_date(self):
-        return self.delivery_date
-
-    def status_message(self):
-        return self.status_message
-
-    def image(self):
-        return self.image
-
-    @property
-    def debug_string(self):
+    def __str__(self):
         return f"{self.id} {self.status_message} {self.delivery_date.date()}"

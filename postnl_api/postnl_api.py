@@ -46,52 +46,48 @@ class PostNL_API(object):
 
     def __init__(self, user, password, refresh_rate=REFRESH_RATE):
         """ Constructor """
-
         self._user = user
         self._password = password
-        self._delivery = {}
-        self._distribution = {}
+        self._deliveries = {}
+        self._distributions = {}
         self._letters = {}
         self._letters_activated = False
         self._last_refresh = None
         self._refresh_rate = refresh_rate
         self._request_login()
 
-    def _is_token_expired(self):
-        """ Check if access token is expired """
-        if datetime.now() > self._token_expires_at:
-            self._request_access_token()
-            return True
+    @property
+    def _token_expired(self):
+        """ checks whether or not the token is expired """
+        return datetime.now() > self._token_expires_at
 
-        return False
-
-    def update(self):
+    def _update(self):
         """ Update the cache """
         current_time = int(time.time())
         last_refresh = 0 if self._last_refresh is None else self._last_refresh
 
         if current_time >= (last_refresh + self._refresh_rate):
-            self.update_packages()
-            self.update_letter_status()
-            self.update_letters()
+            self._update_packages()
+            self._update_letter_status()
+            self._update_letters()
             self._last_refresh = int(time.time())
 
-    def update_packages(self):
+    def _update_packages(self):
         """ Retrieve packages """
         packages = self._request_update(SHIPMENTS_URL)
         if packages is False:
             return
 
-        self._delivery = {}
-        self._distribution = {}
+        self._deliveries = {}
+        self._distributions = {}
 
         for package in packages:
             if package.get("settings").get("box") == "Sender":
-                self._distribution[package["key"]] = Package(package)
+                self._distributions[package["key"]] = Package(package)
             else:
-                self._delivery[package["key"]] = Package(package)
+                self._deliveries[package["key"]] = Package(package)
 
-    def update_letters(self):
+    def _update_letters(self):
         """ Retrieve letters """
         if self._letters_activated is False:
             return
@@ -106,7 +102,7 @@ class PostNL_API(object):
             documents = self._request_update(LETTERS_URL + "/" + letter["barcode"])
             self._letters[letter["barcode"]] = Letter(letter, documents)
 
-    def update_letter_status(self):
+    def _update_letter_status(self):
         """ update the state of being able to see letters """
         validate = self._request_update(VALIDATE_LETTERS_URL)
 
@@ -115,35 +111,37 @@ class PostNL_API(object):
 
     def get_relevant_deliveries(self):
         """ filter shipments to today's and future shipments """
-        self.update()
+        self._update()
         return [
-            s
-            for s in self._delivery.values()
-            if (not s.is_delivered) or (s.is_delivered and s.delivery_today)
+            d
+            for d in self._deliveries.values()
+            if (not d.is_delivered) or (d.is_delivered and d.delivery_today)
         ]
 
     def get_deliveries(self):
         """ Get all packages to be delivered to you """
-        self.update()
-        return self._delivery.values()
+        self._update()
+        return self._deliveries.values()
 
     def get_distributions(self):
         """ Get all packages submitted by you """
-        self.update()
-        return self._distribution.values()
+        self._update()
+        return self._distributions.values()
 
     def get_letters(self):
         """ Get all letters to be delivered to you """
-        self.update()
+        self._update()
         return self._letters.values()
 
+    @property
     def is_letters_activated(self):
         """ Return if letters are activated or not """
         return self._letters_activated
 
-    def _request_update(self, url):
+    def _request_update(self, url, count=0, max=3):
         """ Perform a request to update information """
-        self._is_token_expired()
+        if self._token_expired:
+            self._request_access_token()
         headers = {
             "authorization": "Bearer " + self._access_token,
             "Content-Type": "application/json",
@@ -151,9 +149,9 @@ class PostNL_API(object):
         response = requests.request("GET", url, headers={**headers, **DEFAULT_HEADER})
 
         if response.status_code == 401:
-            _LOGGER.debug("Access denied. Failed to refresh?")
-            self._request_access_token()
-            self._request_update(url)
+            count += 1
+            _LOGGER.debug(f"Access denied. Failed to refresh, attempt {count} of {max}.")
+            self._request_update(url, count, max)
 
         if response.status_code != 200:
             _LOGGER.error("Unable to perform request " + str(response.content))
@@ -197,9 +195,7 @@ class PostNL_API(object):
         """ Refresh access_token """
 
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
         payload = {"grant_type": "refresh_token", "refresh_token": self._refresh_token}
-
         response = requests.request(
             "POST",
             AUTHENTICATE_URL,
@@ -208,7 +204,6 @@ class PostNL_API(object):
         )
 
         data = response.json()
-
         if response.status_code != 200:
             self._request_login()
         else:

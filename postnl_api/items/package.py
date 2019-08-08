@@ -29,36 +29,6 @@ class Package(object):
             )
         self.url = data.get("status").get("webUrl")
 
-    def id(self):
-        return self.id
-
-    def name(self):
-        return self.name
-
-    def type(self):
-        return self.type
-
-    def status(self):
-        return self.status
-
-    def status_message(self):
-        return self.status_message
-
-    def delivery_date(self):
-        return self.delivery_date
-
-    def planned_date(self):
-        return self.planned_date
-
-    def planned_from(self):
-        return self.planned_from
-
-    def planned_to(self):
-        return self.planned_to
-
-    def url(self):
-        return self.url
-
     @property
     def is_delivered(self):
         return self.status == "Delivered"
@@ -67,6 +37,5 @@ class Package(object):
     def delivery_today(self):
         return self.delivery_date.date() == datetime.today().date()
 
-    @property
-    def debug_string(self):
+    def __str__(self):
         return f"{self.id} {self.name} {self.type} {self.status} {self.status_message} {self.delivery_date.date()} {self.planned_date} {self.planned_from} {self.planned_to}"
